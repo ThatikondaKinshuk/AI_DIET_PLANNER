@@ -7,6 +7,7 @@ import time
 import json
 from datetime import datetime
 from pathlib import Path
+from fpdf import FPDF
 
 # Load environment variables from .env file
 load_dotenv()
@@ -144,6 +145,41 @@ def save_plan_to_history(user_profile: dict, plan_markdown: str, model_used: str
     with history_path.open("a", encoding="utf-8") as fp:
         fp.write(json.dumps(record, ensure_ascii=False) + "\n")
 
+
+def build_plan_pdf(plan_markdown: str, user_profile: dict) -> bytes:
+    """Generate a simple PDF document containing the meal plan."""
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 10, "NutriGenie 7-Day Meal Plan", ln=True)
+
+    name_label = user_profile.get("Name") or "NutriGenie User"
+    pdf.set_font("Helvetica", size=12)
+    pdf.multi_cell(0, 8, f"Prepared for: {name_label}")
+    pdf.ln(2)
+
+    for raw_line in plan_markdown.splitlines():
+        line = raw_line.strip()
+        if not line:
+            pdf.ln(3)
+            continue
+
+        if line.startswith("### "):
+            pdf.set_font("Helvetica", "B", 13)
+            pdf.multi_cell(0, 7, line.replace("### ", ""))
+            pdf.set_font("Helvetica", size=12)
+        elif line.startswith("## "):
+            pdf.set_font("Helvetica", "B", 14)
+            pdf.multi_cell(0, 8, line.replace("## ", ""))
+            pdf.set_font("Helvetica", size=12)
+        elif line == "---":
+            pdf.ln(4)
+        else:
+            pdf.multi_cell(0, 6, line)
+
+    return pdf.output(dest="S").encode("latin-1")
+
 # --- Streamlit UI Setup ---
 st.set_page_config(page_title="NutriGenie: AI Diet Planner", layout="wide")
 st.title("✨ NutriGenie: Hyper-Personalized AI Diet Planner")
@@ -205,6 +241,7 @@ if submit_button and client:
     if plan_output:
         st.session_state['plan'] = plan_output
         st.session_state['model_used'] = model_used
+        st.session_state['plan_user'] = user_data
         try:
             save_plan_to_history(user_data, plan_output, model_used)
         except Exception as exc:
@@ -212,12 +249,28 @@ if submit_button and client:
         st.success("✅ Plan Generated! See below.")
     else:
         st.session_state.pop('model_used', None)
+        st.session_state.pop('plan_user', None)
 
 # Display the generated plan if it exists
 if 'plan' in st.session_state:
     if st.session_state.get('model_used'):
         st.caption(f"Plan generated using: {st.session_state['model_used']}")
-    st.markdown(st.session_state['plan'])
+    plan_text = st.session_state['plan']
+    user_profile = st.session_state.get('plan_user', {})
+
+    try:
+        pdf_bytes = build_plan_pdf(plan_text, user_profile)
+        filename = f"nutrigenie_plan_{datetime.now().strftime('%Y%m%d')}.pdf"
+        st.download_button(
+            "⬇️ Download plan as PDF",
+            data=pdf_bytes,
+            file_name=filename,
+            mime="application/pdf",
+        )
+    except Exception as exc:
+        st.warning(f"Could not prepare PDF download: {exc}")
+
+    st.markdown(plan_text)
     
     st.markdown("---")
     
